@@ -6,86 +6,75 @@ package lightstepreceiver // import "github.com/open-telemetry/opentelemetry-col
 import (
 	"errors"
 	"fmt"
-	"io"
-	"net"
-	"net/http"
-	"sync"
 	"time"
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/ptrace"
+	semconv "go.opentelemetry.io/collector/semconv/v1.18.0"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/coreinternal/idutils"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/lightstepreceiver/internal/collectorpb"
 )
 
-// TODO: Can we return an error here? That's what other receivers do?
-func TranslateToPData(req *collectorpb.ReportRequest) (ptrace.Traces, error) {
-	// I think GetSpans() creates a new thing?
+const (
+	InstrumentationScopeName = "lightstep-receiver"
+	InstrumentationScopeVersion = "0.0.1" // TODO: Use the actual internal version?
+)
+
+func ToTraces(req *collectorpb.ReportRequest) (ptrace.Traces, error) {
 	td := ptrace.NewTraces()
-	if len(req.GetSpans()) == 0 {
+	if req.Reporter == nil {
+		return td, errors.New("Reporter in ReportRequest cannot be null.")
+	}
+	if req.GetSpans() == nil || len(req.GetSpans()) == 0 {
 		return td, nil
 	}
 
-	// QUESTION: Can slices ([]) be nil?
-	// Need to check this is null?
 	reporter := req.GetReporter()
-	//reporterId := reporter.GetReporterId() // this one - how is it used by the backend?
-
-	// TODO: Can our legacy tracers include no component name?
 	rss := td.ResourceSpans().AppendEmpty()
 	resource := rss.Resource()
 	translateTagsToAttrs(reporter.GetTags(), resource.Attributes())
-	serviceName := getServiceName(reporter.GetTags())
-	resource.Attributes().PutStr("service.name", serviceName)
 
-	//rs.SetSchemaUrl() // what? to use?
+	serviceName := getServiceName(reporter.GetTags())
+	resource.Attributes().PutStr(semconv.AttributeServiceName, serviceName)
 	sss := rss.ScopeSpans().AppendEmpty()
 	scope := sss.Scope()
-	scope.SetName("lightstep-exporter") // TODO: What does Zipkin/Jaeger do here?
-	scope.SetVersion("0.0.1")
+	scope.SetName(InstrumentationScopeName)
+	scope.SetVersion(InstrumentationScopeVersion)
+
 	spans := sss.Spans()
-	spans.EnsureCapacity(len(req.GetSpans())) // This doesn't create a copy, no?
+	spans.EnsureCapacity(len(req.GetSpans()))
+	tstampOffset, _ := time.ParseDuration(fmt.Sprintf("%dus", req.GetTimestampOffsetMicros()))
 
 	for _, lspan := range req.GetSpans() {
 		span := spans.AppendEmpty()
-		span.SetName(lspan.GetOperationName())
-		translateTagsToAttrs(lspan.GetTags(), span.Attributes())
-
-		ts := lspan.GetStartTimestamp()
-		startt := time.Unix(ts.GetSeconds(), int64(ts.GetNanos()))
-
-		duration, err := time.ParseDuration(fmt.Sprintf("%dus", lspan.GetDurationMicros()))
-		if err != nil {
-			// TODO: Consider logging this one.
-			continue
-		}
-		// TODO: Double check this one? See the actual typical "topology"
-		endt := startt.Add(duration)
-		span.SetStartTimestamp(pcommon.NewTimestampFromTime(startt))
-		span.SetEndTimestamp(pcommon.NewTimestampFromTime(endt))
-
-		// TODO: Verify this is the correct order.
-		span.SetTraceID(idutils.UInt64ToTraceID(0, lspan.GetSpanContext().GetTraceId()))
-		span.SetSpanID(idutils.UInt64ToSpanID(lspan.GetSpanContext().GetSpanId()))
-		setSpanParents(span, lspan.GetReferences())
-
-		translateLogsToEvents(span, lspan.GetLogs())
-
-		// span.Status().SetStatusCode()
-		// TODO: For error, we need to check GetTags(), each, and map the "error" with true to
-		// SpanStatus.ERROR
+		translateToSpan(lspan, span, tstampOffset)
 	}
-
-	// TODO: Check that the simple Unmarshal() call is fine? Ask Alex.
 
 	return td, nil
 }
 
-// The first check takes for granted attrs is empty. Remove it?
-// TODO: consider namespacing our own proto, e.g. "lightstep_proto" as internal.collectorpb
+func translateToSpan(lspan *collectorpb.Span, span ptrace.Span, offset time.Duration) {
+	span.SetName(lspan.GetOperationName())
+	translateTagsToAttrs(lspan.GetTags(), span.Attributes())
+
+	ts := lspan.GetStartTimestamp()
+	startt := time.Unix(ts.GetSeconds(), int64(ts.GetNanos()))
+
+	duration, _ := time.ParseDuration(fmt.Sprintf("%dus", int64(lspan.GetDurationMicros())))
+	span.SetStartTimestamp(pcommon.NewTimestampFromTime(startt.Add(offset)))
+	span.SetEndTimestamp(pcommon.NewTimestampFromTime(startt.Add(duration).Add(offset)))
+
+	// We store our ids using the left-most part of TraceID.
+	span.SetTraceID(idutils.UInt64ToTraceID(0, lspan.GetSpanContext().GetTraceId()))
+	span.SetSpanID(idutils.UInt64ToSpanID(lspan.GetSpanContext().GetSpanId()))
+	setSpanParents(span, lspan.GetReferences())
+
+	translateLogsToEvents(span, lspan.GetLogs(), offset)
+}
+
 func translateTagsToAttrs(tags []*collectorpb.KeyValue, attrs pcommon.Map) {
-	attrs.EnsureCapacity(len(tags)) // Needed at all?
+	attrs.EnsureCapacity(len(tags))
 	for _, kv := range tags {
 		key := kv.GetKey()
 		value := kv.GetValue()
@@ -111,18 +100,27 @@ func getServiceName(tags []*collectorpb.KeyValue) string {
 		}
 	}
 
-	return ""
+	// Identifier used by the SDKs when no service is specified, so we use it too.
+	return "unknown_service"
 }
 
 func setSpanParents(span ptrace.Span, refs []*collectorpb.Reference) {
+	if len(refs) == 0 {
+		return
+	}
+	if len(refs) == 1 { // Common case, no need to do extra steps.
+		span.SetParentSpanID(idutils.UInt64ToSpanID(refs[0].GetSpanContext().GetSpanId()))
+		return
+	}
+
 	links := span.Links()
+	links.EnsureCapacity(len(refs))
 	is_main_parent_set := false
 	for _, ref := range refs {
 		if !is_main_parent_set {
 			span.SetParentSpanID(idutils.UInt64ToSpanID(ref.GetSpanContext().GetSpanId()))
 			is_main_parent_set = true
 		} else {
-			// TODO: Optimize, i.e. we only get Links if references is larger than 1
 			link := links.AppendEmpty()
 			link.SetSpanID(idutils.UInt64ToSpanID(ref.GetSpanContext().GetSpanId()));
 			link.SetTraceID(idutils.UInt64ToTraceID(0, ref.GetSpanContext().GetTraceId()))
@@ -130,17 +128,17 @@ func setSpanParents(span ptrace.Span, refs []*collectorpb.Reference) {
 	}
 }
 
-func translateLogsToEvents(span ptrace.Span, logs []*collectorpb.Log) {
+func translateLogsToEvents(span ptrace.Span, logs []*collectorpb.Log, offset time.Duration) {
 	if len(logs) == 0 {
 		return
 	}
 
 	events := span.Events()
+	events.EnsureCapacity(len(logs))
 	for _, log := range logs {
-		tstamp := time.Unix(log.GetTimestamp().GetSeconds(), int64(log.GetTimestamp().GetNanos()))
+		tstamp := time.Unix(log.GetTimestamp().GetSeconds(), int64(log.GetTimestamp().GetNanos())).Add(offset)
 		event := events.AppendEmpty()
 		event.SetTimestamp(pcommon.NewTimestampFromTime(tstamp))
 		translateTagsToAttrs(log.GetFields(), event.Attributes())
-		// What about name? Check the OT mapping
 	}
 }

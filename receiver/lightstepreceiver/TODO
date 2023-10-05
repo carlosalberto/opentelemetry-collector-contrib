@@ -1,3 +1,15 @@
 TODO
 
-1. Map SpanKind.
+1. Map SpanKind?
+2. Map Span.error (and maybe Span.logs with errors).
+3. Do the same parenthood checks as the OT Shim, when having multiple parents, i.e. take the first one with CHILD_OF.
+4. Baggage is being currently discarded, but we should use it (somehow).
+5. Find all special Tags (e.g. "lightstep.component_name") and think which ones we should map
+   (there is already a document about this somewhere).
+6. Return the timers properly (so the tracers don't log "Collector response did not include timing info"
+8. Baggage in Span/Reference (links) is not used. Should we use it somehow? Is this even shown or saved on the product?
+9. Extract the event name as we do for OTel + OT Shim?
+10. Is it useful on our side to get empty Resource? Resource information without actual spans, that is.
+11. Check the headers, and otherwise reject it?
+12. Enable/implement OBSReport
+13. ReporterId? ligthstep.guid? How are they used? Can we simply pass them around?

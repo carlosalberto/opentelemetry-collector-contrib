@@ -14,7 +14,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/lightstepreceiver/internal/metadata"
 )
 
-// This file implements factory for Lightstep receiver.
+// This file implements factory bits for the Lightstep receiver.
 
 const (
 	// TODO: Define a new port for us to use.

@@ -1130,3 +1130,5 @@ replace github.com/open-telemetry/opentelemetry-collector-contrib/internal/k8ste
 replace github.com/open-telemetry/opentelemetry-collector-contrib/internal/datadog => ../../internal/datadog
 
 replace github.com/open-telemetry/opentelemetry-collector-contrib/extension/jaegerremotesampling => ../../extension/jaegerremotesampling
+
+replace github.com/open-telemetry/opentelemetry-collector-contrib/receiver/lightstepreceiver => ../../receiver/lightstepreceiver

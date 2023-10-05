@@ -124,6 +124,7 @@ require (
 	github.com/open-telemetry/opentelemetry-collector-contrib/receiver/kafkametricsreceiver v0.84.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/receiver/kafkareceiver v0.84.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/receiver/kubeletstatsreceiver v0.84.0
+	github.com/open-telemetry/opentelemetry-collector-contrib/receiver/lightstepreceiver v0.84.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/receiver/lokireceiver v0.84.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/receiver/memcachedreceiver v0.84.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/receiver/mongodbatlasreceiver v0.84.0
@@ -1008,6 +1009,8 @@ replace github.com/open-telemetry/opentelemetry-collector-contrib/receiver/kafka
 replace github.com/open-telemetry/opentelemetry-collector-contrib/receiver/kafkareceiver => ./receiver/kafkareceiver
 
 replace github.com/open-telemetry/opentelemetry-collector-contrib/receiver/kubeletstatsreceiver => ./receiver/kubeletstatsreceiver
+
+replace github.com/open-telemetry/opentelemetry-collector-contrib/receiver/lightstepreceiver => ./receiver/lightstepreceiver
 
 replace github.com/open-telemetry/opentelemetry-collector-contrib/receiver/lokireceiver => ./receiver/lokireceiver
 

@@ -142,6 +142,7 @@ require (
 	github.com/open-telemetry/opentelemetry-collector-contrib/receiver/kafkametricsreceiver v0.84.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/receiver/kafkareceiver v0.84.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/receiver/kubeletstatsreceiver v0.84.0
+	github.com/open-telemetry/opentelemetry-collector-contrib/receiver/lightstepreceiver v0.84.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/receiver/lokireceiver v0.84.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/receiver/memcachedreceiver v0.84.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/receiver/mongodbatlasreceiver v0.84.0
@@ -1144,6 +1145,8 @@ replace github.com/outcaste-io/ristretto v0.2.0 => github.com/outcaste-io/ristre
 replace github.com/DataDog/datadog-agent/pkg/proto => github.com/DataDog/datadog-agent/pkg/proto v0.48.0-beta.1
 
 replace github.com/DataDog/datadog-agent/pkg/trace => github.com/DataDog/datadog-agent/pkg/trace v0.48.0-beta.1
+
+replace github.com/open-telemetry/opentelemetry-collector-contrib/receiver/lightstepreceiver => ../../receiver/lightstepreceiver
 
 // ambiguous import: found package cloud.google.com/go/compute/metadata in multiple modules
 replace cloud.google.com/go => cloud.google.com/go v0.110.2

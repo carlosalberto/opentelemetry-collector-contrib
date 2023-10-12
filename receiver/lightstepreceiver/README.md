@@ -14,7 +14,7 @@ the list of protocols (currently only `http` is supported, but gRPC is planned):
 
 ```yaml
 receivers:
-  otlp:
+  lightstep:
     protocols:
       http:
 ```

@@ -6,12 +6,15 @@ package httpcheckreceiver // import "github.com/open-telemetry/opentelemetry-col
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"sync"
 	"time"
 
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/pdata/pcommon"
+	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/receiver"
 	"go.uber.org/multierr"
@@ -29,7 +32,9 @@ type httpcheckScraper struct {
 	clients  []*http.Client
 	cfg      *Config
 	settings component.TelemetrySettings
+	version  string
 	mb       *metadata.MetricsBuilder
+	logs     consumer.Logs
 }
 
 // start starts the scraper by creating a new HTTP Client on the scraper
@@ -68,6 +73,7 @@ func (h *httpcheckScraper) scrape(ctx context.Context) (pmetric.Metrics, error) 
 
 			start := time.Now()
 			resp, err := targetClient.Do(req)
+			duration := time.Since(start)
 			mux.Lock()
 			h.mb.RecordHttpcheckDurationDataPoint(now, time.Since(start).Milliseconds(), h.cfg.Targets[targetIndex].Endpoint)
 
@@ -86,6 +92,15 @@ func (h *httpcheckScraper) scrape(ctx context.Context) (pmetric.Metrics, error) 
 				}
 			}
 			mux.Unlock()
+
+			// Report logging *outside* the lock.
+			if statusCode != 0 {
+				err = h.logResponse(ctx, h.cfg.Targets[targetIndex].Endpoint, resp, now, duration)
+				if err != nil {
+					h.settings.Logger.Error("failed to log response", zap.Error(err))
+				}
+
+			}
 		}(client, idx)
 	}
 
@@ -94,10 +109,48 @@ func (h *httpcheckScraper) scrape(ctx context.Context) (pmetric.Metrics, error) 
 	return h.mb.Emit(), nil
 }
 
+func (h *httpcheckScraper) logResponse(
+	ctx context.Context,
+	endpoint string,
+	resp *http.Response,
+	timestamp pcommon.Timestamp,
+	elapsed time.Duration) error {
+
+	// Return if logs reporting was NOT enabled.
+	if h.logs == nil {
+		return nil
+	}
+
+	defer resp.Body.Close()
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+
+	out := plog.NewLogs()
+	logs := out.ResourceLogs()
+	rls := logs.AppendEmpty()
+
+	ills := rls.ScopeLogs().AppendEmpty()
+	ills.Scope().SetName("otelcol/httpcheckreceiver")
+	ills.Scope().SetVersion(h.version)
+
+	lr := ills.LogRecords().AppendEmpty()
+	lr.SetTimestamp(timestamp)
+	lr.Body().SetStr(string(bodyBytes))
+	attrs := lr.Attributes()
+	attrs.PutStr("http.url", endpoint)
+	attrs.PutInt("http.response.status_code", int64(resp.StatusCode))
+	attrs.PutInt("http.client.request.duration", int64(elapsed))
+
+	return h.logs.ConsumeLogs(ctx, out)
+}
+
 func newScraper(conf *Config, settings receiver.CreateSettings) *httpcheckScraper {
 	return &httpcheckScraper{
 		cfg:      conf,
 		settings: settings.TelemetrySettings,
+		version:  settings.BuildInfo.Version,
 		mb:       metadata.NewMetricsBuilder(conf.MetricsBuilderConfig, settings),
 	}
 }

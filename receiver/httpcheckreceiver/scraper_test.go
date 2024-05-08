@@ -9,9 +9,12 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component/componenttest"
+	"go.opentelemetry.io/collector/consumer/consumertest"
 	"go.opentelemetry.io/collector/config/confighttp"
 	"go.opentelemetry.io/collector/config/configtls"
 	"go.opentelemetry.io/collector/pdata/pmetric"
@@ -187,6 +190,30 @@ func TestScaperScrape(t *testing.T) {
 			require.NoError(t, pmetrictest.CompareMetrics(expectedMetrics, actualMetrics, tc.compareOptions...))
 		})
 	}
+}
+
+func TestScraperScrapeLogs(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	ms := newMockServer(t, 200)
+	defer ms.Close()
+
+	cfg.Targets = append(cfg.Targets, &targetConfig{
+		ClientConfig: confighttp.ClientConfig{
+			Endpoint: ms.URL,
+		},
+	})
+
+	logsSink := new(consumertest.LogsSink)
+	scraper := newScraper(cfg, receivertest.NewNopCreateSettings())
+	scraper.logs = logsSink
+
+	require.NoError(t, scraper.start(context.Background(), componenttest.NewNopHost()))
+	_, err := scraper.scrape(context.Background())
+	require.NoError(t, err)
+
+	assert.Eventually(t, func() bool {
+		return logsSink.LogRecordCount() == 1
+	}, time.Second, 10*time.Millisecond)
 }
 
 func TestNilClient(t *testing.T) {

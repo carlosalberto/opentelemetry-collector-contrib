@@ -5,6 +5,7 @@ package vcenterreceiver // import "github.com/open-telemetry/opentelemetry-colle
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 
@@ -93,6 +94,16 @@ func (vc *vcenterClient) Datacenters(ctx context.Context) ([]*object.Datacenter,
 	return datacenters, nil
 }
 
+// Datastores returns the Datastores of the vSphere SDK for a given datacenter
+func (vc *vcenterClient) Datastores(ctx context.Context, datacenter *object.Datacenter) ([]*object.Datastore, error) {
+	vc.finder = vc.finder.SetDatacenter(datacenter)
+	datastores, err := vc.finder.DatastoreList(ctx, "*")
+	if err != nil {
+		return []*object.Datastore{}, fmt.Errorf("unable to get datastores: %w", err)
+	}
+	return datastores, nil
+}
+
 // Computes returns the ComputeResources (and ClusterComputeResources) of the vSphere SDK for a given datacenter
 func (vc *vcenterClient) Computes(ctx context.Context, datacenter *object.Datacenter) ([]*object.ComputeResource, error) {
 	vc.finder = vc.finder.SetDatacenter(datacenter)
@@ -112,6 +123,20 @@ func (vc *vcenterClient) ResourcePools(ctx context.Context) ([]*object.ResourceP
 	return rps, err
 }
 
+// VirtualApps returns the VirtualApps in the vSphere SDK
+func (vc *vcenterClient) VirtualApps(ctx context.Context) ([]*object.VirtualApp, error) {
+	vApps, err := vc.finder.VirtualAppList(ctx, "*")
+	if err != nil {
+		var notFoundErr *find.NotFoundError
+		if errors.As(err, &notFoundErr) {
+			return []*object.VirtualApp{}, nil
+		}
+
+		return nil, fmt.Errorf("unable to retrieve vApps: %w", err)
+	}
+	return vApps, err
+}
+
 func (vc *vcenterClient) VMs(ctx context.Context) ([]mo.VirtualMachine, error) {
 	v, err := vc.vm.CreateContainerView(ctx, vc.vimDriver.ServiceContent.RootFolder, []string{"VirtualMachine"}, true)
 	if err != nil {
@@ -122,6 +147,7 @@ func (vc *vcenterClient) VMs(ctx context.Context) ([]mo.VirtualMachine, error) {
 	err = v.Retrieve(ctx, []string{"VirtualMachine"}, []string{
 		"config.hardware.numCPU",
 		"config.instanceUuid",
+		"config.template",
 		"runtime.powerState",
 		"runtime.maxCpuUsage",
 		"summary.quickStats.guestMemoryUsage",
@@ -135,6 +161,7 @@ func (vc *vcenterClient) VMs(ctx context.Context) ([]mo.VirtualMachine, error) {
 		"summary.storage.uncommitted",
 		"summary.runtime.host",
 		"resourcePool",
+		"parentVApp",
 	}, &vms)
 	if err != nil {
 		return nil, fmt.Errorf("unable to retrieve VMs: %w", err)

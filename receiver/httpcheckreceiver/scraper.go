@@ -6,11 +6,13 @@ package httpcheckreceiver // import "github.com/open-telemetry/opentelemetry-col
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"sync"
 	"time"
 
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/receiver"
@@ -30,6 +32,8 @@ type httpcheckScraper struct {
 	cfg      *Config
 	settings component.TelemetrySettings
 	mb       *metadata.MetricsBuilder
+	lb       *LogsBuilder
+	logs     consumer.Logs
 }
 
 // start starts the scraper by creating a new HTTP Client on the scraper
@@ -68,8 +72,9 @@ func (h *httpcheckScraper) scrape(ctx context.Context) (pmetric.Metrics, error) 
 
 			start := time.Now()
 			resp, err := targetClient.Do(req)
+			duration := time.Since(start)
 			mux.Lock()
-			h.mb.RecordHttpcheckDurationDataPoint(now, time.Since(start).Milliseconds(), h.cfg.Targets[targetIndex].Endpoint)
+			h.mb.RecordHttpcheckDurationDataPoint(now, duration.Milliseconds(), h.cfg.Targets[targetIndex].Endpoint)
 
 			statusCode := 0
 			if err != nil {
@@ -85,13 +90,44 @@ func (h *httpcheckScraper) scrape(ctx context.Context) (pmetric.Metrics, error) 
 					h.mb.RecordHttpcheckStatusDataPoint(now, int64(0), h.cfg.Targets[targetIndex].Endpoint, int64(statusCode), req.Method, class)
 				}
 			}
+
+			if h.logs != nil && statusCode != 0 {
+				err = h.logResponse(ctx, h.cfg.Targets[targetIndex].Endpoint, resp, now, duration)
+				if err != nil {
+					h.settings.Logger.Error("failed to log response", zap.Error(err))
+				}
+			}
+
 			mux.Unlock()
 		}(client, idx)
 	}
 
 	wg.Wait()
 
+	if h.logs != nil {
+		err := h.logs.ConsumeLogs(ctx, h.lb.Emit())
+		if err != nil {
+			h.settings.Logger.Error("failed to consume logs", zap.Error(err))
+		}
+	}
 	return h.mb.Emit(), nil
+}
+
+func (h *httpcheckScraper) logResponse(
+	_ context.Context,
+	endpoint string,
+	resp *http.Response,
+	timestamp pcommon.Timestamp,
+	elapsed time.Duration) error {
+
+	defer resp.Body.Close()
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+
+	h.lb.RecordResponse(endpoint, string(bodyBytes), resp.StatusCode, timestamp, elapsed)
+	return nil
 }
 
 func newScraper(conf *Config, settings receiver.CreateSettings) *httpcheckScraper {
@@ -99,5 +135,6 @@ func newScraper(conf *Config, settings receiver.CreateSettings) *httpcheckScrape
 		cfg:      conf,
 		settings: settings.TelemetrySettings,
 		mb:       metadata.NewMetricsBuilder(conf.MetricsBuilderConfig, settings),
+		lb:       NewLogsBuilder(settings),
 	}
 }
